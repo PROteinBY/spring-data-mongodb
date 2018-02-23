@@ -21,6 +21,7 @@ import java.util.Set;
 
 import org.bson.Document;
 import org.springframework.data.geo.GeoResults;
+import org.springframework.data.mongodb.ClientSessionProvider;
 import org.springframework.data.mongodb.core.BulkOperations.BulkMode;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationOptions;
@@ -150,6 +151,22 @@ public interface MongoOperations extends FluentMongoOperations {
 	 */
 	@Nullable
 	<T> T execute(String collectionName, CollectionCallback<T> action);
+
+	/**
+	 * Executes the given {@link SessionCallback} within the {@link com.mongodb.session.ClientSession} obtained via the
+	 * {@link ClientSessionProvider}.
+	 * <p/>
+	 * The {@link com.mongodb.session.ClientSession} is closed when done with the callback.
+	 *
+	 * @param sessionProvider the name of the collection that specifies which {@link MongoCollection} instance will be
+	 *          passed into. Must not be {@literal null} or empty.
+	 * @param action callback object that specifies the MongoDB action the callback action. Must not be {@literal null}.
+	 * @param <T> return type.
+	 * @return a result object returned by the action or {@literal null}.
+	 * @since 2.1
+	 */
+	@Nullable
+	<T> T execute(ClientSessionProvider sessionProvider, SessionCallback<T> action);
 
 	/**
 	 * Executes the given {@link Query} on the entity collection of the specified {@code entityType} backed by a Mongo DB
@@ -769,8 +786,8 @@ public interface MongoOperations extends FluentMongoOperations {
 	}
 
 	/**
-	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
-	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
+	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify <a/>
+	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
 	 *
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
 	 *          fields specification. Must not be {@literal null}.
@@ -782,8 +799,8 @@ public interface MongoOperations extends FluentMongoOperations {
 	<T> T findAndModify(Query query, Update update, Class<T> entityClass);
 
 	/**
-	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
-	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
+	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify <a/>
+	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
 	 *
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
 	 *          fields specification. Must not be {@literal null}.
@@ -796,8 +813,8 @@ public interface MongoOperations extends FluentMongoOperations {
 	<T> T findAndModify(Query query, Update update, Class<T> entityClass, String collectionName);
 
 	/**
-	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
-	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
+	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify <a/>
+	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
 	 * {@link FindAndModifyOptions} into account.
 	 *
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
@@ -813,8 +830,8 @@ public interface MongoOperations extends FluentMongoOperations {
 	<T> T findAndModify(Query query, Update update, FindAndModifyOptions options, Class<T> entityClass);
 
 	/**
-	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
-	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
+	 * Triggers <a href="https://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify <a/>
+	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
 	 * {@link FindAndModifyOptions} into account.
 	 *
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional

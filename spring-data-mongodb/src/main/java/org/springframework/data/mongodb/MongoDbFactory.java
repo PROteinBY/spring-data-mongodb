@@ -30,7 +30,7 @@ import com.mongodb.client.MongoDatabase;
  * @author Thomas Darimont
  * @author Christoph Strobl
  */
-public interface MongoDbFactory extends CodecRegistryProvider {
+public interface MongoDbFactory extends CodecRegistryProvider, ClientSessionProvider {
 
 	/**
 	 * Creates a default {@link DB} instance.

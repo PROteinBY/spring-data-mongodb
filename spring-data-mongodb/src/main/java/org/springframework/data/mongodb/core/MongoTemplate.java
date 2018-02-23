@@ -24,17 +24,21 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import org.aopalliance.intercept.MethodInterceptor;
+import org.aopalliance.intercept.MethodInvocation;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.bson.codecs.Codec;
 import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -61,6 +65,7 @@ import org.springframework.data.mapping.PropertyPath;
 import org.springframework.data.mapping.PropertyReferenceException;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mapping.model.ConvertingPropertyAccessor;
+import org.springframework.data.mongodb.ClientSessionProvider;
 import org.springframework.data.mongodb.MongoDbFactory;
 import org.springframework.data.mongodb.core.BulkOperations.BulkMode;
 import org.springframework.data.mongodb.core.DefaultBulkOperations.BulkOperationContext;
@@ -121,6 +126,7 @@ import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.ObjectUtils;
+import org.springframework.util.ReflectionUtils;
 import org.springframework.util.ResourceUtils;
 import org.springframework.util.StringUtils;
 
@@ -152,6 +158,7 @@ import com.mongodb.client.model.ValidationAction;
 import com.mongodb.client.model.ValidationLevel;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
+import com.mongodb.session.ClientSession;
 import com.mongodb.util.JSONParseException;
 
 /**
@@ -540,6 +547,17 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware, 
 			return callback.doInCollection(collection);
 		} catch (RuntimeException e) {
 			throw potentiallyConvertRuntimeException(e, exceptionTranslator);
+		}
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.MongoOperations#execute(org.springframework.data.mongodb.core.ClientSessionProvider, org.springframework.data.mongodb.core.SessionCallback)
+	 */
+	public <T> T execute(ClientSessionProvider sessionProvider, SessionCallback<T> callback) {
+
+		try (ClientSession session = sessionProvider.getSession()) {
+			return callback.doInSession(new SessionBoundMongoTemplate(session, mongoDbFactory, mongoConverter));
 		}
 	}
 
@@ -1105,8 +1123,9 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware, 
 	protected MongoCollection<Document> prepareCollection(MongoCollection<Document> collection) {
 
 		if (this.readPreference != null) {
-			return collection.withReadPreference(readPreference);
+			collection = collection.withReadPreference(readPreference);
 		}
+
 		return collection;
 	}
 
@@ -2775,7 +2794,7 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware, 
 
 		public Document doInCollection(MongoCollection<Document> collection) throws MongoException, DataAccessException {
 
-			FindIterable<Document> iterable = collection.find(query);
+			FindIterable<Document> iterable = collection.find(query, Document.class);
 
 			if (LOGGER.isDebugEnabled()) {
 
@@ -3374,4 +3393,102 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware, 
 			return ((Document) commandResult.get(CURSOR_FIELD)).get("id");
 		}
 	}
+
+	static class SessionBoundMongoTemplate extends MongoTemplate {
+
+		private final ClientSession session;
+
+		public SessionBoundMongoTemplate(ClientSession session, MongoDbFactory mongoDbFactory,
+				@Nullable MongoConverter mongoConverter) {
+
+			super(mongoDbFactory, mongoConverter);
+
+			Assert.notNull(session, "Session must not be null!");
+			this.session = session;
+		}
+
+		@Override
+		protected MongoCollection<Document> prepareCollection(MongoCollection<Document> collection) {
+
+			MongoCollection preparedCollection = super.prepareCollection(collection);
+
+			ProxyFactory factory = new ProxyFactory();
+			factory.setTarget(preparedCollection);
+			factory.setInterfaces(MongoCollection.class);
+			factory.setOpaque(true);
+
+			factory.addAdvice(new SessionAwareMethodInterceptor(session, preparedCollection, MongoCollection.class));
+
+			return (MongoCollection) factory.getProxy();
+		}
+
+		@Override
+		public MongoDatabase getDb() {
+
+			MongoDatabase database = super.getDb();
+
+			ProxyFactory factory = new ProxyFactory();
+			factory.setTarget(database);
+			factory.setInterfaces(MongoDatabase.class);
+			factory.setOpaque(true);
+
+			factory.addAdvice(new SessionAwareMethodInterceptor(session, database, MongoDatabase.class));
+
+			return (MongoDatabase) factory.getProxy();
+		}
+	}
+
+	static class SessionAwareMethodInterceptor implements MethodInterceptor {
+
+		private final ClientSession session;
+		private final Object target;
+		private final Class<?> targetType;
+
+		public <T> SessionAwareMethodInterceptor(ClientSession session, T target, @Nullable Class<? super T> targetType) {
+
+			this.session = session;
+			this.target = target;
+			this.targetType = ClassUtils.getUserClass(targetType == null ? target.getClass() : targetType);
+		}
+
+		@Override
+		public Object invoke(MethodInvocation methodInvocation) throws Throwable {
+
+			if (!requiresSession(methodInvocation)) {
+				return methodInvocation.proceed();
+			}
+
+			Method targetMethod = findTargetWithSession(methodInvocation.getMethod());
+			return targetMethod == null ? methodInvocation.proceed()
+					: ReflectionUtils.invokeMethod(targetMethod, target, prepareArguments(methodInvocation));
+		}
+
+		private boolean requiresSession(MethodInvocation methodInvocation) {
+
+			if (ObjectUtils.isEmpty(methodInvocation.getArguments()) || methodInvocation.getArguments()[0] == null) {
+				return true;
+			}
+
+			return !ClassUtils.isAssignable(ClientSession.class, methodInvocation.getArguments()[0].getClass());
+		}
+
+		private Method findTargetWithSession(Method sourceMethod) {
+
+			Class<?>[] argTypes = sourceMethod.getParameterTypes();
+			Class<?>[] args = new Class<?>[argTypes.length + 1];
+			args[0] = ClientSession.class;
+			System.arraycopy(argTypes, 0, args, 1, argTypes.length);
+
+			return ReflectionUtils.findMethod(targetType, sourceMethod.getName(), args);
+		}
+
+		private Object[] prepareArguments(MethodInvocation invocation) {
+
+			Object[] args = new Object[invocation.getArguments().length + 1];
+			args[0] = session;
+			System.arraycopy(invocation.getArguments(), 0, args, 1, invocation.getArguments().length);
+			return args;
+		}
+	}
+
 }
